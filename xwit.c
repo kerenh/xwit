@@ -33,6 +33,7 @@
 #include <X11/Xproto.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <sys/time.h>
 #include "dsimple.h"
 #include "ClientWin.h"
@@ -170,6 +171,40 @@ static Bool MyFetchName(Display *display, Window w, unsigned char **name)
 		*name = data;
 		return (data!=NULL)?True:False;
 	}
+}
+
+
+/* See if the given atom of the _NET_* family is supported on the
+   display.  */
+
+static Bool HasNetAtom(Display *dpy, Atom atom)
+{
+	static Atom *atoms;
+	static unsigned long n_atoms = -1;
+	int i;
+
+	if (n_atoms == -1) {
+		Atom type;
+		int format;
+		unsigned long bytes_after;
+
+		n_atoms = 0;
+		XGetWindowProperty (dpy, RootWindow (dpy, screen),
+				    XInternAtom(dpy, "_NET_SUPPORTED", True),
+				    0, LONG_MAX, False, XA_ATOM, &type, &format,
+				    &n_atoms, &bytes_after, (void *)&atoms);
+
+		if (type != XA_ATOM)
+			return False;
+	}
+
+	if (atoms == NULL)
+		return False;
+
+	for (i = 0; i < n_atoms; i++)
+		if (atoms[i] == atom)
+			return True;
+	return False;
 }
 
 /*
@@ -555,9 +590,32 @@ doit(Window window)
 		case pop:
 			XMapRaised(dpy, window);
 			break;
-		case focus:
-		        XSetInputFocus(dpy, window, CurrentTime, RevertToNone);
+		case focus: {
+			static XClientMessageEvent event;
+
+			if (event.type == 0) {
+				event.type = ClientMessage;
+				event.message_type =
+					XInternAtom(dpy, "_NET_ACTIVE_WINDOW", True);
+				event.format = 32;
+				event.data.l[0] = 1;
+				event.data.l[1] = CurrentTime;
+			}
+
+			/* if no _NET_ACTIVE_WINDOW, the wm is oldschool... */
+			if (event.message_type == 0
+			    || !HasNetAtom (dpy, event.message_type))
+				XSetInputFocus(dpy, window, CurrentTime, RevertToNone);
+			else {
+				event.window = window;
+				event.data.l[2] = root;
+				if (XSendEvent(dpy, root, (Bool) False,
+					       SubstructureRedirectMask,
+					       (XEvent *) & event) == 0)
+					Fatal_Error("send event failed");
+			}
 			break;
+		}
 		case raise:
 			values.stack_mode = Above;
 			value_mask = CWStackMode;
