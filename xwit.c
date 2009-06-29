@@ -207,6 +207,20 @@ static Bool HasNetAtom(Display *dpy, Atom atom)
 	return False;
 }
 
+static Bool GetXServerTime(Display *dpy)
+{
+	Window w;
+        XEvent ev;
+	w = XCreateSimpleWindow(dpy, RootWindow(dpy, screen),
+				-100, -100, 1, 1, 0, 0, 0 );
+	XSelectInput(dpy, w, PropertyChangeMask);
+	XChangeProperty(dpy, w, XA_WM_NAME, XA_STRING, 8, PropModeReplace,
+			(unsigned char *) "Fake Name", 9);
+        XWindowEvent(dpy, w, PropertyChangeMask, &ev);
+        XDestroyWindow(dpy, w);
+        return ev.xproperty.time;
+}
+
 /*
  * find all windows below this and if name matches call doit on it
  */
@@ -599,7 +613,6 @@ doit(Window window)
 					XInternAtom(dpy, "_NET_ACTIVE_WINDOW", True);
 				event.format = 32;
 				event.data.l[0] = 1;
-				event.data.l[1] = CurrentTime;
 			}
 
 			/* if no _NET_ACTIVE_WINDOW, the wm is oldschool... */
@@ -608,6 +621,7 @@ doit(Window window)
 				XSetInputFocus(dpy, window, CurrentTime, RevertToNone);
 			else {
 				event.window = window;
+				event.data.l[1] = GetXServerTime(dpy);
 				event.data.l[2] = root;
 				if (XSendEvent(dpy, root, (Bool) False,
 					       SubstructureRedirectMask,
