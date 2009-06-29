@@ -17,14 +17,13 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+#include "ClientWin.h"
 
-static Window TryChildren();
+static Window TryChildren(Display *,Window,Atom);
 
 /* Find a window with WM_STATE, else return win itself, as per ICCCM */
 
-Window XmuClientWindow (dpy, win)
-    Display *dpy;
-    Window win;
+Window XmuClientWindow (Display *dpy,Window win)
 {
     Atom WM_STATE;
     Atom type = None;
@@ -47,10 +46,7 @@ Window XmuClientWindow (dpy, win)
 }
 
 static
-Window TryChildren (dpy, win, WM_STATE)
-    Display *dpy;
-    Window win;
-    Atom WM_STATE;
+Window TryChildren (Display *dpy, Window win, Atom WM_STATE)
 {
     Window root, parent;
     Window *children;

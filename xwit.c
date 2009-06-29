@@ -26,15 +26,19 @@
  *
  * This version by David DiGiacomo, david@slack.com.
  */
+#include <X11/Xatom.h>
 #include <X11/Xos.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xproto.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/time.h>
 #include "dsimple.h"
+#include "ClientWin.h"
 
 /* note: called by dsimple.c code, must be global */
+void
 usage()
 {
 	static char Revision[] = "$Revision: 3.4 $";
@@ -58,21 +62,24 @@ usage()
 
 	fprintf(stderr,
 	"usage: %s -display <display> -sync\n\
-	-pop -iconify -unmap\n\
+	-pop -focus -iconify -unmap -print \n\
+	-raise -lower -opposite -[un]circulate\n\
 	-resize w h -rows r -columns c -[r]move x y\n\
 	-[r]warp x y -colormap <colormapid> -[no]save\n\
-	-name <name> -iconname <name>\n\
+	-name <name> -iconname <name> -property <lookfor>\n\
 	-bitmap <file> -mask <file> -[r]iconmove x y\n\
 	-[no]backingstore -[no]saveunder\n\
 	-[no]keyrepeat keycode ... keycode - keycode\n\
-	-id <windowid> -root -current -select\n\
+	-id <windowid> -root -current -select -all\n\
 	-names <initialsubstrings>... [must be last]\n",
 		program_name);
 	exit(2);
 }
 
 enum functions {
-    pop, icon, unmap, colormap,
+    pop, focus, icon, unmap, colormap,
+    print,
+    raise, lower, opposite, circulate, uncirculate,
     move, rmove, warp, rwarp,
     resize, save, nosave,
     keyrepeat, nokeyrepeat,
@@ -114,6 +121,7 @@ static char *wmiconname;
 static int Giconx, Gicony;
 static int nrows;
 static int ncolumns;
+static int nbuffer;
 static char *bitmapname;
 static char *maskname;
 static int Gbs, Gsu;
@@ -122,37 +130,64 @@ static int Gbs, Gsu;
 static int Gwinfound;
 
 /* forward declarations */
-static void doit();
+static void doit(Window);
 
 /*
  * sleep for given millisecs for those without usleep
  */
-static
-mssleep(ms)
-int ms;
+static void
+mssleep(int ms)
 {
     struct timeval tv;
     tv.tv_sec = ms/1000;
     tv.tv_usec = (ms%1000)*1000;
-    select(0,(int*)0,(int*)0,(int*)0,&tv);
+    select(0,NULL,NULL,NULL,&tv);
+}
+
+static Atom property = XA_WM_NAME;
+
+static Bool MyFetchName(Display *display, Window w, unsigned char **name)
+{
+	Atom returnedType;
+	int returnedFormat;
+	unsigned long number;
+	unsigned long bytesAfterReturn;
+	unsigned char *data;
+
+	if( Success != XGetWindowProperty(display, w, property,
+				0, (long)BUFSIZ, False,
+				XA_STRING,
+				&returnedType, &returnedFormat,
+				&number, &bytesAfterReturn, &data)) {
+		*name = NULL;
+		return False;
+	} else if( returnedType != XA_STRING || returnedFormat != 8 ) {
+		if(data)
+			XFree(data);
+		*name = NULL;
+		return False;
+	} else {
+		*name = data;
+		return (data!=NULL)?True:False;
+	}
 }
 
 /*
  * find all windows below this and if name matches call doit on it
  */
-static
-downtree(top)
-Window top;
+static void
+downtree(Window top)
 {
     Window *child, dummy;
     unsigned int children, i;
-    char **cpp, *name;
+    char **cpp;
+    unsigned char *name;
     if (XQueryTree(dpy, top, &dummy, &dummy, &child, &children)==0)
 	Fatal_Error("XQueryTree failed");
     for (i=0; i<children; i++)
-    if(XFetchName (dpy, child[i], &name)){
+    if(MyFetchName (dpy, child[i], &name)){
 	for(cpp = names;*cpp!=0;cpp++)
-	    if(strncmp(*cpp,name,strlen(*cpp))==0){
+	    if(strncmp(*cpp, (char*)name, strlen(*cpp))==0){
 		doit(child[i]);
 		break;
 	    }
@@ -161,11 +196,13 @@ Window top;
 	downtree(child[i]);	/* dont go down if found a name */
     if(child)XFree((char *)child);
 }
+
+
 /*
  * [un]set autorepeat for individual keys
  */
-static
-setrepeat()
+static void
+setrepeat(void)
 {
     unsigned long value_mask;
     XKeyboardControl values;
@@ -186,10 +223,8 @@ setrepeat()
  * get window position, compensating for decorations
  * (based on xwininfo.c)
  */
-static
-getpos(window, xp, yp)
-	Window window;
-	int *xp, *yp;
+static void
+getpos(Window window, int *xp, int *yp)
 {
 	XWindowAttributes attributes;
 	int rx, ry;
@@ -209,10 +244,8 @@ getpos(window, xp, yp)
 /*
  * get window size
  */
-static
-getsize(window, wp, hp)
-	Window window;
-	int *wp, *hp;
+static void
+getsize(Window window, int *wp, int *hp)
 {
 	XWindowAttributes attributes;
 
@@ -226,11 +259,8 @@ getsize(window, wp, hp)
 /*
  * set window position
  */
-static
-domove(window, x, y, right, bottom)
-	Window window;
-	int x, y;
-	int right, bottom;
+static void
+domove(Window window, int x, int y, int right, int bottom)
 {
 	XWindowChanges values;
 	unsigned int value_mask;
@@ -297,12 +327,41 @@ domove(window, x, y, right, bottom)
 }
 
 /*
+ * dump some intresting window data
+ */
+static void
+doprint(Window window)
+{
+	XWindowAttributes attributes;
+	unsigned char *name;
+
+	if( MyFetchName(dpy,window,&name) ) {
+		if (XGetWindowAttributes(dpy, window, &attributes) == 0)
+			Fatal_Error("XGetWindowAttributes(0x%x)", window);
+
+		printf("0x%x: x=%d y=%d w=%d h=%d d=%d ",
+			(int)window,
+			attributes.x,attributes.y,
+			attributes.width,attributes.height,
+			attributes.depth);
+		putchar('\'');
+		while( *name != '\0' ) {
+			if( *name >= ' ' && ((*name)&0x80)== 0 ) {
+				putchar(*name);
+			} else
+				printf("\\%03hho",*name);
+			name++;
+		}
+		putchar('\'');
+		putchar('\n');
+	}
+}
+
+/*
  * set window size
  */
-static
-doresize(window, w, h)
-    Window window;
-    int w, h;
+static void
+doresize(Window window, int w, int h)
 {
     XWindowChanges values;
     unsigned int value_mask;
@@ -343,10 +402,8 @@ doresize(window, w, h)
 /*
  * set row/column size
  */
-static
-rcresize(what, window)
-    enum functions what;
-    Window window;
+static void
+rcresize(enum functions what, Window window)
 {
     XSizeHints *hints;
     long supplied;
@@ -375,11 +432,8 @@ rcresize(what, window)
     XFree(hints);
 }
 
-static
-loadbitmap(window, file, pmp)
-	Window window;
-	char *file;
-	Pixmap *pmp;
+static void
+loadbitmap(Window window, const char *file, Pixmap *pmp)
 {
 	unsigned int w, h;
 	int xhot, yhot;
@@ -389,9 +443,8 @@ loadbitmap(window, file, pmp)
 		Fatal_Error("XReadBitmapFile failed");
 }
 
-static
-setbitmap(window)
-	Window window;
+static void
+setbitmap(Window window)
 {
 	static XWMHints *hints;
 	static Pixmap bitmap_pm;
@@ -418,7 +471,7 @@ setbitmap(window)
 		XSetCloseDownMode(dpy, RetainTemporary);
 	}
 
-	if (ohints = XGetWMHints(dpy, window)) {
+	if ((ohints = XGetWMHints(dpy, window)) != NULL ) {
 		if (ohints->icon_pixmap && hints->icon_pixmap)
 			XFreePixmap(dpy, ohints->icon_pixmap);
 		if (ohints->icon_mask && hints->icon_mask)
@@ -429,9 +482,8 @@ setbitmap(window)
 	XSetWMHints(dpy, window, hints);
 }
 
-static
-setwinattr(window)
-	Window window;
+static void
+setwinattr(Window window)
 {
 	XSetWindowAttributes swa;
 	unsigned long valuemask;
@@ -455,8 +507,7 @@ setwinattr(window)
  * iconify the given window, or map and raise it, or whatever
  */
 static void
-doit(window)
-	Window window;
+doit(Window window)
 {
 	XWindowChanges values;
 	unsigned int value_mask;
@@ -498,8 +549,35 @@ doit(window)
 		case colormap:
 			XSetWindowColormap(dpy, window, cmap);
 			break;
+		case print:
+			doprint(window);
+			break;
 		case pop:
 			XMapRaised(dpy, window);
+			break;
+		case focus:
+		        XSetInputFocus(dpy, window, CurrentTime, RevertToNone);
+			break;
+		case raise:
+			values.stack_mode = Above;
+			value_mask = CWStackMode;
+			XConfigureWindow(dpy, window, value_mask, &values);
+			break;
+		case lower:
+			values.stack_mode = Below;
+			value_mask = CWStackMode;
+			XConfigureWindow(dpy, window, value_mask, &values);
+			break;
+		case opposite:
+			values.stack_mode = Opposite;
+			value_mask = CWStackMode;
+			XConfigureWindow(dpy, window, value_mask, &values);
+			break;
+		case circulate:
+			XCirculateSubwindowsUp(dpy, window);
+			break;
+		case uncirculate:
+			XCirculateSubwindowsDown(dpy, window);
 			break;
 		case unmap:
 			XUnmapWindow(dpy, window);
@@ -591,9 +669,7 @@ doit(window)
 
 /* based on xwininfo.c */
 static Window
-xwit_select_window(dpy, current)
-	Display *dpy;
-	int current;
+xwit_select_window(Display *dpy, int current)
 {
 	Window window = None;
 	Window wroot;
@@ -622,8 +698,7 @@ xwit_select_window(dpy, current)
 }
 
 static Window
-getxid(s)
-	char *s;
+getxid(const char *s)
 {
 	XID id;
 
@@ -633,18 +708,16 @@ getxid(s)
 		return id;
 	Fatal_Error("Invalid ID format: %s", s);
 	/* NOTREACHED */
+        return -1;
 }
 
 static int
-matchopt(key, nargs, argc, argv)
-	char *key;
-	int nargs;
-	int *argc;
-	char **argv;
+matchopt(const char *key, int nargs, int *argc, char **argv)
 {
 	int enough = 0;
 	int match = 1;
-	char *ap, *kp;
+	char *ap;
+	const char *kp;
 
 	ap = *argv;
 	if (*ap == '-')
@@ -709,9 +782,42 @@ matchopt(key, nargs, argc, argv)
 	return match;
 }
 
-main(argc, argv)
-	int argc;
-	char **argv;
+static void
+FetchBuffer(Display *dpy, int nbuf)
+{
+        char *buf;
+        int size;
+
+        buf = XFetchBuffer(dpy, &size, nbuf);
+
+        if( size == 0 )
+                fprintf( stderr, "Could not fetch cutbuffer %d\n", nbuf );
+        else
+                fwrite( buf, 1, size, stdout );
+}
+
+static void
+StoreBuffer(Display *dpy, int nbuf)
+{
+        char *buf = NULL;
+        int bufsize, nread, total=0;
+
+        bufsize = 10;
+        buf = malloc( bufsize );
+        while( (nread=read(0,buf+total,bufsize-total)) > 0 )
+        {
+                total+=nread;
+                bufsize *= 2;
+                buf = realloc( buf, bufsize );
+        }
+        XStoreBuffer(dpy, buf, total, nbuf);
+        free(buf);
+}
+
+char *allwindows[] = {""};
+
+int
+main(int argc, char *argv[])
 {
 	Window window = 0;
 	int *pargc = &argc;
@@ -727,7 +833,12 @@ main(argc, argv)
 	while (argv++, --argc > 0) {
 		/* argv[0] = next argument */
 		/* argc = # of arguments left */
-		if (matchopt("ba*ckingstore", 0, pargc, argv) ||
+		if (matchopt("a*ll", 0, pargc, argv)) {
+			Winidmode = WID_names;
+			names = allwindows;
+			numnames = 1;
+		}
+		else if (matchopt("ba*ckingstore", 0, pargc, argv) ||
 			matchopt("bs", 0, pargc, argv)) {
 			function |= FBIT(F_winattr);
 			Gbs = 1;
@@ -744,6 +855,14 @@ main(argc, argv)
 		else if (matchopt("co*lumns", 1, pargc, argv)) {
 			function |= FBIT(columns);
 			ncolumns = atoi(*++argv);
+		}
+		else if (matchopt("store*buffer", 1, pargc, argv)) {
+			nbuffer = atoi(*++argv);
+                        StoreBuffer( dpy, nbuffer );
+		}
+		else if (matchopt("fetch*buffer", 1, pargc, argv)) {
+			nbuffer = atoi(*++argv);
+                        FetchBuffer( dpy, nbuffer );
 		}
 		else if (matchopt("c*urrent", 0, pargc, argv)) {
 			Winidmode = WID_curr;
@@ -845,6 +964,27 @@ main(argc, argv)
 		else if (matchopt("p*op", 0, pargc, argv)) {
 			function |= FBIT(pop);
 		}
+		else if (matchopt("pr*int", 0, pargc, argv)) {
+			function |= FBIT(print);
+		}
+		else if (matchopt("f*ocus", 0, pargc, argv)) {
+			function |= FBIT(focus);
+		}
+		else if (matchopt("ra*ise", 0, pargc, argv)) {
+			function |= FBIT(raise);
+		}
+		else if (matchopt("lo*wer", 0, pargc, argv)) {
+			function |= FBIT(lower);
+		}
+		else if (matchopt("op*posite", 0, pargc, argv)) {
+			function |= FBIT(opposite);
+		}
+		else if (matchopt("cir*culate", 0, pargc, argv)) {
+			function |= FBIT(circulate);
+		}
+		else if (matchopt("uncir*culate", 0, pargc, argv)) {
+			function |= FBIT(uncirculate);
+		}
 		else if (matchopt("ri*conmove", 2, pargc, argv)) {
 			function |= FBIT(riconmove);
 			Giconx = atoi(argv[1]);
@@ -898,6 +1038,12 @@ main(argc, argv)
 			warpx = atoi(argv[1]);
 			warpy = atoi(argv[2]);
 			argv += 2;
+		} else if(matchopt("prop*erty",1, pargc,argv)) {
+			property = XInternAtom(dpy,argv[1],False);
+			if( None == property ) {
+			    Fatal_Error("Unknown atom %s",argv[1]);
+			}
+			argv++;
 		}
 		else
 			usage();
@@ -916,7 +1062,6 @@ main(argc, argv)
 	case WID_env:
 		{
 			char *s;
-			extern char *getenv();
 
 			s = getenv("WINDOWID");
 			if (s != 0)
@@ -938,6 +1083,8 @@ main(argc, argv)
 	case WID_select:
 		window = xwit_select_window(dpy, 0);
 		break;
+	default:
+	        break;
 	}
 
 	switch (Winidmode) {
@@ -956,5 +1103,6 @@ main(argc, argv)
 
 	XSync(dpy, True);
 	(void) XCloseDisplay(dpy);
-	exit(!Gwinfound);
+	return(!Gwinfound);
 }
+

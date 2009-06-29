@@ -1,25 +1,47 @@
-/* $XConsortium: dsimple.c,v 1.12 91/05/11 21:01:36 gildea Exp $ */
-/* $Id: dsimple.c,v 3.2 95/10/18 16:58:55 dd Exp $ */
+/* $Xorg: dsimple.c,v 1.4 2001/02/09 02:05:54 xorgcvs Exp $ */
+/*
+
+Copyright 1993, 1998  The Open Group
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation.
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of The Open Group shall
+not be used in advertising or otherwise to promote the sale, use or
+other dealings in this Software without prior written authorization
+from The Open Group.
+
+*/
+/* $XFree86: xc/programs/xlsfonts/dsimple.c,v 3.6 2001/12/14 20:02:09 dawes Exp $ */
+
 #include <X11/Xos.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/cursorfont.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
 /*
  * Other_stuff.h: Definitions of routines in other_stuff.
  *
  * Written by Mark Lillibridge.   Last updated 7/1/87
- *
- * Send bugs, etc. to chariot@athena.mit.edu.
  */
 
-unsigned long Resolve_Color();
-Pixmap Bitmap_To_Pixmap();
-Window Select_Window();
-void out();
-void blip();
-Window Window_With_Name();
-void Fatal_Error();
+#include "dsimple.h"
 
 /*
  * Just_display: A group of routines designed to make the writting of simple
@@ -29,24 +51,20 @@ void Fatal_Error();
  *               and screen already defined on entry.
  *
  * Written by Mark Lillibridge.   Last updated 7/1/87
- *
- * Send bugs, etc. to chariot@athena.mit.edu.
  */
 
 
 /* This stuff is defined in the calling program by just_display.h */
-extern char *program_name;
-extern Display *dpy;
-extern int screen;
-
+char *program_name = "unknown_program";
+Display *dpy;
+int screen;
 
 /*
  * Malloc: like malloc but handles out of memory using Fatal_Error.
  */
-char *Malloc(size)
-     unsigned size;
+char *Malloc(size_t size)
 {
-	char *data, *malloc();
+	char *data;
 
 	if (!(data = malloc(size)))
 	  Fatal_Error("Out of memory!");
@@ -58,11 +76,9 @@ char *Malloc(size)
 /*
  * Realloc: like Malloc except for realloc, handles NULL using Malloc.
  */
-char *Realloc(ptr, size)
-        char *ptr;
-        int size;
+char *Realloc(void *ptr,size_t size)
 {
-	char *new_ptr, *realloc();
+	void *new_ptr;
 
 	if (!ptr)
 	  return(Malloc(size));
@@ -78,9 +94,7 @@ char *Realloc(ptr, size)
  * Get_Display_Name (argc, argv) Look for -display, -d, or host:dpy (obselete)
  * If found, remove it from command line.  Don't go past a lone -.
  */
-char *Get_Display_Name(pargc, argv)
-    int *pargc;  /* MODIFIED */
-    char **argv; /* MODIFIED */
+char *Get_Display_Name(int *pargc, char **argv)
 {
     int argc = *pargc;
     char **pargv = argv+1;
@@ -138,9 +152,7 @@ char *display_name;
  *                           for this display is then stored in screen.
  *                           Does not require dpy or screen defined.
  */
-void Setup_Display_And_Screen(argc, argv)
-int *argc;      /* MODIFIED */
-char **argv;    /* MODIFIED */
+void Setup_Display_And_Screen(int *argc, char **argv)
 {
 	dpy = Open_Display (Get_Display_Name(argc, argv));
 	screen = DefaultScreen(dpy);
@@ -169,59 +181,6 @@ void Beep()
 {
 	XBell(dpy, 50);
 }
-
-
-/*
- * ReadBitmapFile: same as XReadBitmapFile except it returns the bitmap
- *                 directly and handles errors using Fatal_Error.
- */
-static void _bitmap_error(status, filename)
-     int status;
-     char *filename;
-{
-  if (status == BitmapOpenFailed)
-    Fatal_Error("Can't open file %s!", filename);
-  else if (status == BitmapFileInvalid)
-    Fatal_Error("file %s: Bad bitmap format.", filename);
-  else
-    Fatal_Error("Out of memory!");
-}
-
-Pixmap ReadBitmapFile(d, filename, width, height, x_hot, y_hot)
-     Drawable d;
-     char *filename;
-     int *width, *height, *x_hot, *y_hot;
-{
-  Pixmap bitmap;
-  int status;
-
-  status = XReadBitmapFile(dpy, RootWindow(dpy, screen), filename,
-			   (unsigned int *)width, (unsigned int *)height,
-			   &bitmap, x_hot, y_hot);
-  if (status != BitmapSuccess)
-    _bitmap_error(status, filename);
-
-  return(bitmap);
-}
-
-
-/*
- * WriteBitmapFile: same as XWriteBitmapFile except it handles errors
- *                  using Fatal_Error.
- */
-void WriteBitmapFile(filename, bitmap, width, height, x_hot, y_hot)
-     char *filename;
-     Pixmap bitmap;
-     int width, height, x_hot, y_hot;
-{
-  int status;
-
-  status= XWriteBitmapFile(dpy, filename, bitmap, width, height, x_hot,
-			   y_hot);
-  if (status != BitmapSuccess)
-    _bitmap_error(status, filename);
-}
-
 
 /*
  * Select_Window_Args: a rountine to provide a common interface for
@@ -259,7 +218,7 @@ Window Select_Window_Args(rargc, argv)
 #define OPTION argv[0]
 #define NXTOPTP ++argv, --argc>0
 #define NXTOPT if (++argv, --argc==0) usage()
-#define COPYOPT nargv++[0]=OPTION; nargc++
+#define COPYOPT nargv++[0]=OPTION, nargc++
 
 	while (NXTOPTP) {
 		if (!strcmp(OPTION, "-")) {
@@ -285,7 +244,7 @@ Window Select_Window_Args(rargc, argv)
 			w=0;
 			sscanf(OPTION, "0x%lx", &w);
 			if (!w)
-			  sscanf(OPTION, "%ld", &w);
+			  sscanf(OPTION, "%lu", &w);
 			if (!w)
 			  Fatal_Error("Invalid window id format: %s.", OPTION);
 			continue;
@@ -301,12 +260,7 @@ Window Select_Window_Args(rargc, argv)
  * Other_stuff: A group of routines which do common X11 tasks.
  *
  * Written by Mark Lillibridge.   Last updated 7/1/87
- *
- * Send bugs, etc. to chariot@athena.mit.edu.
  */
-
-extern Display *dpy;
-extern int screen;
 
 /*
  * Resolve_Color: This routine takes a color name and returns the pixel #
@@ -381,7 +335,9 @@ Pixmap Bitmap_To_Pixmap(dpy, d, gc, bitmap, width, height)
  */
 void blip()
 {
-  outl("blip!");
+    fflush(stdout);
+    fprintf(stderr, "blip!\n");
+    fflush(stderr);
 }
 
 
@@ -447,7 +403,7 @@ Window Window_With_Name(dpy, top, name)
 {
 	Window *children, dummy;
 	unsigned int nchildren;
-	int i;
+	unsigned int i;
 	Window w=0;
 	char *window_name;
 
@@ -467,36 +423,18 @@ Window Window_With_Name(dpy, top, name)
 }
 
 /*
- * outl: a debugging routine.  Flushes stdout then prints a message on stderr
- *       and flushes stderr.  Used to print messages when past certain points
- *       in code so we can tell where we are.  Outl may be invoked like
- *       printf with up to 7 arguments.
- */
-/* VARARGS1 */
-outl(msg, arg0,arg1,arg2,arg3,arg4,arg5,arg6)
-     char *msg;
-     char *arg0, *arg1, *arg2, *arg3, *arg4, *arg5, *arg6;
-{
-	fflush(stdout);
-	fprintf(stderr, msg, arg0, arg1, arg2, arg3, arg4, arg5, arg6);
-	fprintf(stderr, "\n");
-	fflush(stderr);
-}
-
-
-/*
  * Standard fatal error routine - call like printf but maximum of 7 arguments.
  * Does not require dpy or screen defined.
  */
-/* VARARGS1 */
-void Fatal_Error(msg, arg0,arg1,arg2,arg3,arg4,arg5,arg6)
-char *msg;
-char *arg0, *arg1, *arg2, *arg3, *arg4, *arg5, *arg6;
+void Fatal_Error(char *msg, ...)
 {
+	va_list args;
 	fflush(stdout);
 	fflush(stderr);
 	fprintf(stderr, "%s: error: ", program_name);
-	fprintf(stderr, msg, arg0, arg1, arg2, arg3, arg4, arg5, arg6);
+	va_start(args, msg);
+	vfprintf(stderr, msg, args);
+	va_end(args);
 	fprintf(stderr, "\n");
 	exit(2);
 }
