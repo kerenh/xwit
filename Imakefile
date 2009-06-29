@@ -1,0 +1,26 @@
+# $Id: Imakefile,v 3.1 95/08/24 17:26:21 dd Exp $
+# Imakefile for xwit: window interface tool
+
+LOCAL_LIBRARIES = $(XLIB)
+SRCS = xwit.c dsimple.c ClientWin.c
+OBJS = xwit.o dsimple.o ClientWin.o
+
+DISTFILES = README Imakefile $(SRCS) dsimple.h xwit.man patchlevel.h
+
+ComplexProgramTarget(xwit)
+
+dist:
+	@echo $(DISTFILES)
+
+shar: $(PROGRAM).shar
+
+$(PROGRAM).shar: $(DISTFILES)
+	shar $(DISTFILES) > $@
+
+uu: $(PROGRAM).tar.Z.uu
+
+$(PROGRAM).tar.Z.uu: $(DISTFILES)
+	tar cf - $(DISTFILES) | compress | uuencode $(PROGRAM).tar.Z > $@
+
+clean::
+	$(RM) $(PROGRAM).shar $(PROGRAM).tar.Z.uu
